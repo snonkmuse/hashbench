@@ -4,8 +4,11 @@
 importScripts("randomx_st.js");
 
 var BENCH_KEY = "hashbench direct comparison key";
-var EXAMPLE_KEY = "RandomX example key";
-var EXAMPLE_INPUT = "RandomX example input";
+/* The canonical test vector is defined over the key/input INCLUDING a trailing
+   NUL byte in the length (as in the reference test) — the lengths are part of
+   the data, so they must match exactly. */
+var EXAMPLE_KEY = "RandomX example key\0";
+var EXAMPLE_INPUT = "RandomX example input\0";
 var EXAMPLE_HASH = "8a48e5f9db45ab79d9080574c4d81954fe6ac63842214aff73c244b26330b7c9";
 
 var Module = null, F = null, cache = 0, vm = 0, inPtr = 0, outPtr = 0;
