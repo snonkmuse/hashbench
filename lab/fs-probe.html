@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Origin Filesystem Probe — Hashbench Lab</title>
+<style>
+  body { font-family: monospace; background: #111; color: #ddd; margin: 2em; max-width: 62em; }
+  #out { white-space: pre-wrap; border: 1px solid #333; padding: 1em; font-size: 0.92em; }
+  a { color: #79c0ff; } .dim { color: #888; }
+</style>
+</head>
+<body>
+<h1>Origin Filesystem Probe</h1>
+<p>Everything a web page is able to enumerate of "the filesystem" is its own
+origin sandbox. This page lists all of it, and tries the obvious escapes to show
+where the walls are. Part of the <a href="./">Permissions &amp; PWA Lab</a>.</p>
+<div id="out">probing…</div>
+
+<script>
+"use strict";
+var out = [];
+function line(s) { out.push(s); document.getElementById("out").textContent = out.join("\n"); }
+function err(e) { return (e && e.name ? e.name : "Error") + ": " + (e && e.message ? e.message : e); }
+
+if ("serviceWorker" in navigator) { navigator.serviceWorker.register("./sw.js").catch(function () {}); }
+
+(async function () {
+  line("origin: " + location.origin + location.pathname);
+  line("");
+  line("== Storage estimate ==");
+  try {
+    var est = await navigator.storage.estimate();
+    var persisted = await navigator.storage.persisted();
+    line("usage: " + est.usage + " B, quota: " + est.quota + " B, persisted: " + persisted);
+  } catch (e) { line("estimate failed — " + err(e)); }
+
+  line("");
+  line("== Origin Private File System (OPFS) — the only 'filesystem' a page owns ==");
+  try {
+    var root = await navigator.storage.getDirectory();
+    var names = [];
+    for await (var entry of root.values()) { names.push(entry.kind + " " + entry.name); }
+    line("OPFS root entries: " + (names.length ? names.join(", ") : "(empty — the page has written nothing)"));
+  } catch (e) { line("OPFS unavailable — " + err(e)); }
+
+  line("");
+  line("== Escape attempts from the sandbox ==");
+  try {
+    var r2 = await navigator.storage.getDirectory();
+    await r2.getFileHandle("../../../etc/passwd");
+    line("OPFS getFileHandle('../../../etc/passwd'): SUCCEEDED (unexpected!)");
+  } catch (e) { line("OPFS getFileHandle('../../../etc/passwd') -> " + err(e)); }
+  try {
+    var r3 = await navigator.storage.getDirectory();
+    await r3.getDirectoryHandle("..");
+    line("OPFS getDirectoryHandle('..'): SUCCEEDED (unexpected!)");
+  } catch (e) { line("OPFS getDirectoryHandle('..') -> " + err(e)); }
+  try {
+    var resp = await fetch("file:///etc/passwd");
+    line("fetch('file:///etc/passwd'): status " + resp.status + " (unexpected!)");
+  } catch (e) { line("fetch('file:///etc/passwd') -> " + err(e)); }
+  try {
+    var resp2 = await fetch("/etc/passwd");
+    line("fetch('/etc/passwd') resolved against the ORIGIN (github.io), status: " + resp2.status + " — a URL path is not a local path");
+  } catch (e) { line("fetch('/etc/passwd') -> " + err(e)); }
+
+  line("");
+  line("== Cache Storage (this origin) ==");
+  try {
+    var keys = await caches.keys();
+    line("cache names: " + (keys.length ? keys.join(", ") : "(none)"));
+    for (var k of keys) {
+      var c = await caches.open(k);
+      var reqs = await c.keys();
+      reqs.forEach(function (r) { line("  [" + k + "] " + r.url); });
+    }
+  } catch (e) { line("caches failed — " + err(e)); }
+
+  line("");
+  line("== IndexedDB databases (this origin) ==");
+  try {
+    if (indexedDB.databases) {
+      var dbs = await indexedDB.databases();
+      line(dbs.length ? dbs.map(function (d) { return d.name; }).join(", ") : "(none)");
+    } else { line("indexedDB.databases() API unavailable"); }
+  } catch (e) { line("idb failed — " + err(e)); }
+
+  line("");
+  line("== Host file access APIs ==");
+  line("showOpenFilePicker present: " + !!window.showOpenFilePicker);
+  line("showDirectoryPicker present: " + !!window.showDirectoryPicker);
+  line("Note: these open a native picker where a HUMAN chooses one file/folder. " +
+       "A page cannot list the host drive, a home directory, or any path it was not handed.");
+  line("");
+  line("probe done");
+})();
+</script>
+</body>
+</html>
