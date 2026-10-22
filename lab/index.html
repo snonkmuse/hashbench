@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Permissions &amp; PWA Lab — Hashbench</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#111111">
+<style>
+  body { font-family: monospace; background: #111; color: #ddd; margin: 2em; max-width: 62em; }
+  h2 { margin-top: 1.6em; }
+  table { border-collapse: collapse; } td, th { border: 1px solid #333; padding: 4px 10px; text-align: left; }
+  button { font-family: monospace; font-size: 1em; padding: 0.35em 0.9em; margin: 0.2em 0.3em 0.2em 0; }
+  .dim { color: #888; } .ok { color: #7ee787; } .bad { color: #ff7b72; }
+  #log { white-space: pre-wrap; font-size: 0.9em; color: #aaa; border: 1px solid #333; padding: 0.8em; min-height: 5em; }
+  video { width: 320px; background: #000; display: block; margin-top: 0.5em; }
+  #micLevel { width: 320px; height: 14px; background: #222; margin-top: 0.5em; }
+  #micFill { height: 100%; width: 0%; background: #7ee787; }
+  a { color: #79c0ff; }
+</style>
+</head>
+<body>
+<h1>Permissions &amp; PWA Lab</h1>
+<p><b>Local-only test lab.</b> Nothing on this page is recorded, uploaded, or sent anywhere —
+every result stays in this tab. Browsers only hand out camera, microphone, files, and
+location after <i>you</i> click and approve, so nothing here prompts on load: each test
+runs only from its button. Camera/mic streams are never recorded and stop themselves
+after 15 seconds. File tests read <i>metadata only</i> (name, size, type) of files you
+pick — never contents. Clipboard read reports only the length of what's there.</p>
+
+<h2>PWA</h2>
+<p id="swStatus">Service worker: checking…</p>
+<p id="displayMode">Display mode: —</p>
+<button id="installBtn" disabled>Install as app</button>
+<span id="installNote" class="dim">Install becomes available when the browser decides the page is installable (manifest + service worker + engagement).</span>
+<p id="storageLine">Storage: —</p>
+<button id="persistBtn">Request persistent storage</button>
+
+<h2>Permission states (queried, no prompts)</h2>
+<table><thead><tr><th>Permission</th><th>State</th></tr></thead><tbody id="permTable"></tbody></table>
+<button id="refreshPerms">Refresh states</button>
+
+<h2>Click-to-test</h2>
+<button id="geoBtn">Geolocation</button>
+<button id="notifBtn">Notifications</button>
+<button id="camBtn">Camera</button>
+<button id="micBtn">Microphone</button>
+<button id="camMicBtn">Camera + Microphone</button>
+<button id="stopMediaBtn">Stop media</button>
+<button id="fileBtn">Open file picker (metadata only)</button>
+<button id="dirBtn">Open directory picker (names/count only)</button>
+<button id="clipWriteBtn">Clipboard: write test string</button>
+<button id="clipReadBtn">Clipboard: read (length only)</button>
+<button id="wakeBtn">Wake lock (10 s)</button>
+<video id="preview" autoplay muted playsinline style="display:none"></video>
+<div id="micLevel" style="display:none"><div id="micFill"></div></div>
+
+<h2>Detected APIs (not requested)</h2>
+<p id="apiList" class="dim">—</p>
+<p class="dim">Screen capture and hardware device choosers (Bluetooth/USB/Serial/HID) are
+detected but intentionally not wired to buttons here: they can expose your whole screen or
+real hardware, which a test page has no business asking for. Everything above is the
+set a page can reasonably test with a click.</p>
+
+<h2>Log</h2>
+<div id="log"></div>
+<p class="dim">Part of <a href="../">Hashbench</a> — <a href="../randomx.html">RandomX benchmark</a>.</p>
+
+<script>
+"use strict";
+function log(msg) {
+  var el = document.getElementById("log");
+  el.textContent += new Date().toLocaleTimeString() + "  " + msg + "\n";
+}
+function line(id, html) { document.getElementById(id).innerHTML = html; }
+
+/* ---------- PWA ---------- */
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").then(function (reg) {
+    line("swStatus", "Service worker: registered (scope " + reg.scope + ")" +
+      (navigator.serviceWorker.controller ? ", controlling this page" : ", will control after reload"));
+  }).catch(function (e) { line("swStatus", "Service worker: FAILED — " + e.message); });
+} else { line("swStatus", "Service worker: not supported in this browser"); }
+line("displayMode", "Display mode: " + (matchMedia("(display-mode: standalone)").matches ? "standalone (installed)" : "browser tab"));
+var deferredPrompt = null;
+addEventListener("beforeinstallprompt", function (e) {
+  e.preventDefault(); deferredPrompt = e;
+  document.getElementById("installBtn").disabled = false;
+  line("installNote", "This browser says the lab is installable.");
+});
+document.getElementById("installBtn").onclick = function () { if (deferredPrompt) { deferredPrompt.prompt(); } };
+function storageLine() {
+  if (!navigator.storage || !navigator.storage.estimate) { line("storageLine", "Storage: API unavailable"); return; }
+  navigator.storage.estimate().then(function (est) {
+    navigator.storage.persisted().then(function (p) {
+      line("storageLine", "Storage: usage " + (est.usage || 0) + " B of quota " + (est.quota || 0) + " B; persisted = " + p);
+    });
+  });
+}
+storageLine();
+document.getElementById("persistBtn").onclick = function () {
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().then(function (granted) { log("persistent storage request -> " + granted); storageLine(); });
+  } else { log("persistent storage API unavailable"); }
+};
+
+/* ---------- Permission states ---------- */
+var PERMS = ["geolocation", "notifications", "camera", "microphone", "clipboard-read", "clipboard-write", "persistent-storage", "accelerometer", "gyroscope", "magnetometer", "background-sync", "display-capture"];
+function refreshPerms() {
+  var tb = document.getElementById("permTable");
+  tb.innerHTML = "";
+  PERMS.forEach(function (name) {
+    var tr = document.createElement("tr");
+    var a = document.createElement("td"); a.textContent = name;
+    var b = document.createElement("td"); b.textContent = "…";
+    tr.appendChild(a); tr.appendChild(b); tb.appendChild(tr);
+    if (!navigator.permissions) { b.textContent = "Permissions API unavailable"; return; }
+    try {
+      navigator.permissions.query({ name: name }).then(function (st) {
+        b.textContent = st.state;
+        st.onchange = refreshPerms;
+      }).catch(function () { b.textContent = "unsupported"; });
+    } catch (e) { b.textContent = "unsupported"; }
+  });
+}
+document.getElementById("refreshPerms").onclick = refreshPerms;
+refreshPerms();
+
+/* ---------- Click-to-test ---------- */
+var activeStream = null, micCtx = null, mediaTimer = null;
+function stopMedia() {
+  if (activeStream) { activeStream.getTracks().forEach(function (t) { t.stop(); }); activeStream = null; }
+  if (micCtx) { micCtx.close(); micCtx = null; }
+  if (mediaTimer) { clearTimeout(mediaTimer); mediaTimer = null; }
+  document.getElementById("preview").style.display = "none";
+  document.getElementById("micLevel").style.display = "none";
+}
+document.getElementById("stopMediaBtn").onclick = function () { stopMedia(); log("media stopped"); };
+
+function showStream(stream, wantVideo, wantAudio) {
+  activeStream = stream;
+  stream.getTracks().forEach(function (t) { log("track: " + t.kind + " — " + (t.label || "(label hidden)") + " [" + t.readyState + "]"); });
+  if (wantVideo) {
+    var v = document.getElementById("preview");
+    v.srcObject = stream; v.style.display = "block";
+  }
+  if (wantAudio) {
+    micCtx = new AudioContext();
+    var source = micCtx.createMediaStreamSource(stream);
+    var analyser = micCtx.createAnalyser(); analyser.fftSize = 256;
+    source.connect(analyser);
+    document.getElementById("micLevel").style.display = "block";
+    var data = new Uint8Array(analyser.frequencyBinCount);
+    (function tick() {
+      if (!micCtx) { return; }
+      analyser.getByteFrequencyData(data);
+      var avg = data.reduce(function (a, b) { return a + b; }, 0) / data.length;
+      document.getElementById("micFill").style.width = Math.min(100, avg * 2) + "%";
+      requestAnimationFrame(tick);
+    })();
+  }
+  mediaTimer = setTimeout(function () { stopMedia(); log("media auto-stopped after 15 s"); }, 15000);
+}
+function gum(constraints, label) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { log(label + ": getUserMedia unavailable"); return; }
+  navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
+    log(label + ": GRANTED (nothing is recorded; auto-stop in 15 s)");
+    showStream(stream, !!constraints.video, !!constraints.audio);
+    refreshPerms();
+  }).catch(function (e) { log(label + ": " + e.name + " — " + e.message); refreshPerms(); });
+}
+document.getElementById("camBtn").onclick = function () { gum({ video: true }, "Camera"); };
+document.getElementById("micBtn").onclick = function () { gum({ audio: true }, "Microphone"); };
+document.getElementById("camMicBtn").onclick = function () { gum({ video: true, audio: true }, "Camera+Mic"); };
+
+document.getElementById("geoBtn").onclick = function () {
+  if (!navigator.geolocation) { log("Geolocation: unavailable"); return; }
+  navigator.geolocation.getCurrentPosition(function (pos) {
+    log("Geolocation: GRANTED — lat " + pos.coords.latitude.toFixed(3) + ", lon " + pos.coords.longitude.toFixed(3) +
+        " (±" + Math.round(pos.coords.accuracy) + " m), rounded to 3 decimals on purpose");
+    refreshPerms();
+  }, function (e) { log("Geolocation: " + e.message); refreshPerms(); }, { timeout: 10000 });
+};
+document.getElementById("notifBtn").onclick = function () {
+  if (!("Notification" in window)) { log("Notifications: unavailable"); return; }
+  Notification.requestPermission().then(function (p) {
+    log("Notifications: " + p);
+    if (p === "granted") { new Notification("Perm Lab", { body: "Local test notification — nothing was sent anywhere." }); }
+    refreshPerms();
+  });
+};
+document.getElementById("fileBtn").onclick = function () {
+  if (!window.showOpenFilePicker) { log("File picker: File System Access API unavailable in this browser"); return; }
+  showOpenFilePicker({ multiple: true }).then(function (handles) {
+    handles.forEach(function (h) {
+      h.getFile().then(function (f) {
+        log("File picked: " + f.name + " — " + f.size + " B, type " + (f.type || "?") + ", modified " + new Date(f.lastModified).toISOString() + " (metadata only; contents not read)");
+      });
+    });
+  }).catch(function (e) { log("File picker: " + e.name); });
+};
+document.getElementById("dirBtn").onclick = function () {
+  if (!window.showDirectoryPicker) { log("Directory picker: unavailable in this browser"); return; }
+  showDirectoryPicker().then(function (dir) {
+    var count = 0;
+    (async function () { for await (var _ of dir.values()) { count++; } log("Directory picked: " + dir.name + " — " + count + " top-level entries (names/contents not read)"); })();
+  }).catch(function (e) { log("Directory picker: " + e.name); });
+};
+var CLIP_TEST = "perm-lab-clipboard-test";
+document.getElementById("clipWriteBtn").onclick = function () {
+  navigator.clipboard.writeText(CLIP_TEST).then(function () { log("Clipboard write: ok (wrote the lab test string)"); refreshPerms(); })
+    .catch(function (e) { log("Clipboard write: " + e.name + " — " + e.message); });
+};
+document.getElementById("clipReadBtn").onclick = function () {
+  if (!navigator.clipboard.readText) { log("Clipboard read: unavailable"); return; }
+  navigator.clipboard.readText().then(function (text) {
+    log("Clipboard read: ok — " + text.length + " characters" + (text === CLIP_TEST ? " (it is the lab test string)" : " (contents deliberately not shown)"));
+    refreshPerms();
+  }).catch(function (e) { log("Clipboard read: " + e.name + " — " + e.message); });
+};
+document.getElementById("wakeBtn").onclick = function () {
+  if (!navigator.wakeLock) { log("Wake lock: unavailable"); return; }
+  navigator.wakeLock.request("screen").then(function (lock) {
+    log("Wake lock: acquired for 10 s");
+    setTimeout(function () { lock.release(); log("Wake lock: released"); }, 10000);
+  }).catch(function (e) { log("Wake lock: " + e.name + " — " + e.message); });
+};
+
+/* ---------- Detected APIs (presence only, never requested) ---------- */
+var apis = [
+  ["Bluetooth", !!navigator.bluetooth], ["USB", !!navigator.usb], ["Serial", !!navigator.serial],
+  ["HID", !!navigator.hid], ["WebAuthn / passkeys", !!window.PublicKeyCredential],
+  ["Screen capture (getDisplayMedia)", !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)],
+  ["File System Access", !!window.showOpenFilePicker], ["Wake Lock", !!navigator.wakeLock],
+  ["Web Share", !!navigator.share], ["Badging", !!navigator.setAppBadge],
+  ["Window Management", !!window.getScreenDetails], ["Device Memory", navigator.deviceMemory != null]
+];
+document.getElementById("apiList").textContent =
+  apis.map(function (p) { return p[0] + ": " + (p[1] ? "present" : "absent"); }).join(" · ");
+log("lab ready — service worker scope is this directory only; no prompts have been fired");
+</script>
+</body>
+</html>
