@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Browser Hashrate Benchmark — double SHA-256</title>
+<style>
+  body { font-family: monospace; background: #111; color: #ddd; margin: 2em; }
+  #hashrate { font-size: 3em; color: #7ee787; }
+  .dim { color: #888; }
+  button { font-size: 1.1em; padding: 0.4em 1em; margin-right: 0.5em; }
+</style>
+</head>
+<body>
+<h1>Browser Hashrate Benchmark</h1>
+<p>Workload: Bitcoin-style double SHA-256 of an 80-byte header, nonce incremented per trial,
+   computed by a pure-JavaScript SHA-256 running in a Web Worker. One trial = one double hash.
+   Benchmark only — no pool, no wallet, no network mining. Stops automatically.</p>
+<p id="selftest">Self-test (SHA-256 of "abc"): pending…</p>
+<p id="env">Environment: pending…</p>
+<div id="hashrate">— H/s</div>
+<p id="status">Status: idle</p>
+<p id="total">Total hashes: 0</p>
+<p id="elapsed">Elapsed: 0.0 s</p>
+<button id="start">Start 60 s benchmark</button>
+<button id="stop">Stop</button>
+<p class="dim">URL parameters: ?autostart=1&amp;seconds=60 auto-runs on load.</p>
+
+<script>
+"use strict";
+/* The worker body: stringified and loaded from a Blob so this file is self-contained. */
+function benchWorkerMain() {
+  var K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ];
+  function rotr(x, n) { return ((x >>> n) | (x << (32 - n))) >>> 0; }
+  function sha256(bytes) {
+    var H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    var bitLen = bytes.length * 8;
+    var total = bytes.length + 1 + ((56 - ((bytes.length + 1) % 64) + 64) % 64) + 8;
+    var msg = new Uint8Array(total);
+    msg.set(bytes);
+    msg[bytes.length] = 0x80;
+    var dv = new DataView(msg.buffer);
+    dv.setUint32(total - 4, bitLen >>> 0);
+    var w = new Uint32Array(64);
+    for (var chunk = 0; chunk < total; chunk += 64) {
+      var i, t1, t2, S0, S1, s0, s1, ch, maj;
+      for (i = 0; i < 16; i++) { w[i] = dv.getUint32(chunk + i * 4); }
+      for (i = 16; i < 64; i++) {
+        s0 = (rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3)) >>> 0;
+        s1 = (rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10)) >>> 0;
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+      }
+      var a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (i = 0; i < 64; i++) {
+        S1 = (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) >>> 0;
+        ch = ((e & f) ^ (~e & g)) >>> 0;
+        t1 = (h + S1 + ch + K[i] + w[i]) >>> 0;
+        S0 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) >>> 0;
+        maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
+        t2 = (S0 + maj) >>> 0;
+        h = g; g = f; f = e; e = (d + t1) >>> 0;
+        d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+      }
+      H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+      H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+    }
+    var out = new Uint8Array(32);
+    var odv = new DataView(out.buffer);
+    for (var j = 0; j < 8; j++) { odv.setUint32(j * 4, H[j]); }
+    return out;
+  }
+  function hex(bytes) {
+    var s = "";
+    for (var i = 0; i < bytes.length; i++) { s += ("0" + bytes[i].toString(16)).slice(-2); }
+    return s;
+  }
+  self.onmessage = function (ev) {
+    var data = ev.data;
+    if (data.type === "selftest") {
+      var abc = new Uint8Array([97, 98, 99]);
+      self.postMessage({ type: "selftest", hex: hex(sha256(abc)) });
+      return;
+    }
+    if (data.type === "start") {
+      var seconds = data.seconds || 60;
+      var batch = data.batch || 2000;
+      var header = new Uint8Array(80);
+      for (var i = 0; i < 80; i++) { header[i] = (i * 31 + 7) & 0xff; }
+      var nonce = 0;
+      var count = 0;
+      var start = performance.now();
+      var end = start + seconds * 1000;
+      var now = start;
+      while ((now = performance.now()) < end) {
+        for (var b = 0; b < batch; b++) {
+          header[76] = nonce & 0xff;
+          header[77] = (nonce >>> 8) & 0xff;
+          header[78] = (nonce >>> 16) & 0xff;
+          header[79] = (nonce >>> 24) & 0xff;
+          sha256(sha256(header));
+          nonce = (nonce + 1) >>> 0;
+          count++;
+        }
+        self.postMessage({ type: "progress", count: count, elapsedMs: performance.now() - start });
+      }
+      self.postMessage({ type: "done", count: count, elapsedMs: performance.now() - start });
+    }
+  };
+}
+
+var params = new URLSearchParams(location.search);
+var seconds = parseInt(params.get("seconds") || "60", 10);
+var worker = new Worker(URL.createObjectURL(new Blob(["(" + benchWorkerMain.toString() + ")();"], { type: "text/javascript" })));
+var running = false;
+
+document.getElementById("env").textContent =
+  "Environment: " + navigator.userAgent + " | hardwareConcurrency = " + navigator.hardwareConcurrency;
+
+worker.onmessage = function (ev) {
+  var d = ev.data;
+  if (d.type === "selftest") {
+    var expect = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    document.getElementById("selftest").textContent =
+      "Self-test (SHA-256 of \"abc\"): " + d.hex + " — " + (d.hex === expect ? "PASS" : "FAIL");
+    return;
+  }
+  var secs = d.elapsedMs / 1000;
+  var rate = secs > 0 ? d.count / secs : 0;
+  document.getElementById("total").textContent = "Total hashes: " + d.count;
+  document.getElementById("elapsed").textContent = "Elapsed: " + secs.toFixed(1) + " s";
+  document.getElementById("hashrate").textContent = rate.toFixed(1) + " H/s";
+  if (d.type === "progress") {
+    document.getElementById("status").textContent = "Status: RUNNING";
+  } else if (d.type === "done") {
+    running = false;
+    document.getElementById("status").textContent = "Status: DONE — final " + rate.toFixed(1) + " H/s over " + secs.toFixed(1) + " s, " + d.count + " hashes";
+    document.title = "DONE " + rate.toFixed(1) + " H/s";
+  }
+};
+worker.postMessage({ type: "selftest" });
+
+function startBench() {
+  if (running) { return; }
+  running = true;
+  document.getElementById("status").textContent = "Status: RUNNING";
+  worker.postMessage({ type: "start", seconds: seconds, batch: 2000 });
+}
+document.getElementById("start").textContent = "Start " + seconds + " s benchmark";
+document.getElementById("start").onclick = startBench;
+document.getElementById("stop").onclick = function () { worker.terminate(); document.getElementById("status").textContent = "Status: STOPPED"; running = false; };
+if (params.get("autostart") === "1") { startBench(); }
+</script>
+</body>
+</html>
