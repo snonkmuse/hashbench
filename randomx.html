@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RandomX Browser Benchmark — Monero PoW in WebAssembly</title>
+<style>
+  body { font-family: monospace; background: #111; color: #ddd; margin: 2em; max-width: 60em; }
+  #hashrate { font-size: 3em; color: #7ee787; }
+  .dim { color: #888; }
+  button, select { font-size: 1.05em; padding: 0.35em 0.9em; margin-right: 0.5em; }
+  a { color: #79c0ff; }
+</style>
+</head>
+<body>
+<h1>RandomX Browser Benchmark</h1>
+<p>The real Monero proof-of-work algorithm (RandomX v1), compiled to WebAssembly and run
+   entirely in this page — no pool, no wallet, nothing is mined or submitted anywhere.
+   Configuration is deliberately the slowest stock one: <b>light mode</b> (256 MiB cache,
+   no 2 GiB dataset), <b>interpreted VM</b> (no JIT), <b>software AES</b>, <b>1 thread</b>.
+   Native miners use fast mode + JIT + hardware AES and are much faster; the reference
+   numbers under the controls show both kinds.</p>
+<p id="selftest">Self-test (canonical RandomX test vector): waiting for module…</p>
+<p id="cacheline">Cache init: —</p>
+<p id="env">Environment: —</p>
+<div id="hashrate">— H/s</div>
+<p id="status">Status: loading module…</p>
+<p id="total">Total hashes: 0</p>
+<p id="elapsed">Elapsed: 0.0 s</p>
+<p id="lasthash">Last hash: —</p>
+<label>Duration:
+  <select id="dur">
+    <option value="60">60 s</option>
+    <option value="120" selected>120 s</option>
+    <option value="300">300 s</option>
+  </select>
+</label>
+<button id="start">Start benchmark</button>
+<button id="stop">Stop</button>
+<p class="dim">Reference numbers (measured Oct 22, 2026): Hatch VM, XMRig native, fast mode + JIT,
+   1 thread: <b>316.5 H/s</b>. Hatch VM, this exact Wasm build in Node, light + interpreted,
+   1 thread: <b>1.74 H/s</b> — that is the like-for-like control for this page.
+   URL parameters: ?autostart=1&amp;seconds=120 auto-runs on load.</p>
+<p class="dim">RandomX © tevador and contributors, BSD-3-Clause (see RandomX.LICENSE).
+   WebAssembly port: <a href="https://github.com/aa022/RandomX-bonanza">aa022/RandomX-bonanza</a>.
+   Companion benchmark: <a href="./">double SHA-256</a>.</p>
+
+<script>
+"use strict";
+var params = new URLSearchParams(location.search);
+var secondsParam = parseInt(params.get("seconds") || "", 10);
+if (secondsParam > 0) {
+  var sel = document.getElementById("dur");
+  var opt = document.createElement("option");
+  opt.value = String(secondsParam); opt.textContent = secondsParam + " s"; opt.selected = true;
+  sel.appendChild(opt);
+}
+document.getElementById("env").textContent =
+  "Environment: " + navigator.userAgent + " | hardwareConcurrency = " + navigator.hardwareConcurrency;
+
+var worker = null, ready = false, running = false;
+function setStatus(s) { document.getElementById("status").textContent = "Status: " + s; }
+
+function spawn() {
+  worker = new Worker("rx-worker.js");
+  ready = false;
+  worker.onmessage = function (ev) {
+    var d = ev.data;
+    if (d.type === "selftest") {
+      document.getElementById("selftest").textContent =
+        "Self-test (canonical RandomX test vector): " + d.hex + " — " + (d.pass ? "PASS" : "FAIL");
+    } else if (d.type === "ready") {
+      ready = true;
+      document.getElementById("cacheline").textContent =
+        "Cache init: " + (d.cacheInitMs / 1000).toFixed(1) + " s (256 MiB Argon2d cache, light mode)";
+      setStatus("ready");
+      if (params.get("autostart") === "1") { startBench(); }
+    } else if (d.type === "progress" || d.type === "done") {
+      var secs = d.elapsedMs / 1000;
+      var rate = secs > 0 ? d.count / secs : 0;
+      document.getElementById("total").textContent = "Total hashes: " + d.count;
+      document.getElementById("elapsed").textContent = "Elapsed: " + secs.toFixed(1) + " s";
+      document.getElementById("hashrate").textContent = rate.toFixed(2) + " H/s";
+      if (d.type === "done") {
+        running = false;
+        document.getElementById("lasthash").textContent = "Last hash: " + d.lastHash;
+        setStatus("DONE — final " + rate.toFixed(2) + " H/s over " + secs.toFixed(1) + " s, " + d.count + " hashes");
+        document.title = "DONE " + rate.toFixed(2) + " H/s";
+      } else {
+        setStatus("RUNNING");
+      }
+    } else if (d.type === "error") {
+      setStatus("ERROR — " + d.message);
+    }
+  };
+  worker.onerror = function (e) { setStatus("ERROR — worker failed: " + (e.message || "unknown")); };
+  worker.postMessage({ type: "init" });
+}
+function startBench() {
+  if (!ready || running) { return; }
+  running = true;
+  setStatus("RUNNING");
+  worker.postMessage({ type: "start", seconds: parseInt(document.getElementById("dur").value, 10) });
+}
+document.getElementById("start").onclick = startBench;
+document.getElementById("stop").onclick = function () {
+  if (worker) { worker.terminate(); }
+  running = false;
+  setStatus("STOPPED — respawning a fresh worker");
+  spawn();
+};
+spawn();
+</script>
+</body>
+</html>
