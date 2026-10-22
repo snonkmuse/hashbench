@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Relay Client — Hashbench Lab</title>
+<style>
+  body { font-family: monospace; background: #111; color: #ddd; margin: 2em; max-width: 62em; }
+  table { border-collapse: collapse; } td, th { border: 1px solid #333; padding: 4px 10px; text-align: left; }
+  .dim { color: #888; } .ok { color: #7ee787; }
+  #received { border: 1px solid #444; padding: 1em; min-height: 4em; white-space: pre-wrap; word-break: break-all; }
+  a { color: #79c0ff; }
+</style>
+</head>
+<body>
+<h1>Relay Client</h1>
+<p id="status">Starting…</p>
+<p class="dim">This page broadcasts its browser info and live permission states on the
+<code>hashbench-relay-v1</code> channel (BroadcastChannel — same browser, same origin) every 2 seconds,
+and answers commands from the <a href="relay-admin.html">relay admin panel</a>.
+In the cross-device setup the same messages ride the presence server instead; the
+transport changes, the protocol doesn't.</p>
+
+<h2>This session</h2>
+<table><tbody id="infoTable"></tbody></table>
+<h2>Permission states (live)</h2>
+<table><tbody id="permTable"></tbody></table>
+
+<h2>Received test payload</h2>
+<div id="received" class="dim">(nothing received yet)</div>
+<p id="ackLine" class="dim">No file.test received yet.</p>
+
+<script>
+"use strict";
+var CHANNEL = "hashbench-relay-v1";
+var id = sessionStorage.getItem("relay.sessionId");
+if (!id) {
+  var buf = new Uint8Array(8); crypto.getRandomValues(buf);
+  id = Array.from(buf, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+  sessionStorage.setItem("relay.sessionId", id);
+}
+var bc = ("BroadcastChannel" in window) ? new BroadcastChannel(CHANNEL) : null;
+document.getElementById("status").innerHTML =
+  "Session <b>" + id + "</b> — " + (bc ? '<span class="ok">broadcasting</span> on channel ' + CHANNEL : "BroadcastChannel unsupported in this browser");
+
+var PERMS = ["geolocation", "notifications", "camera", "microphone", "clipboard-read", "clipboard-write", "persistent-storage"];
+var permStates = {};
+function refreshPerms() {
+  if (!navigator.permissions) { return; }
+  PERMS.forEach(function (name) {
+    try {
+      navigator.permissions.query({ name: name }).then(function (st) {
+        permStates[name] = st.state; st.onchange = function () { refreshPerms(); broadcast(); };
+        renderPerms();
+      }).catch(function () { permStates[name] = "unsupported"; renderPerms(); });
+    } catch (e) { permStates[name] = "unsupported"; renderPerms(); }
+  });
+}
+function info() {
+  return {
+    userAgent: navigator.userAgent,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    deviceMemory: navigator.deviceMemory || null,
+    language: navigator.language,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    screen: screen.width + "x" + screen.height,
+    viewport: innerWidth + "x" + innerHeight,
+    connection: navigator.connection ? navigator.connection.effectiveType : null
+  };
+}
+function renderInfo() {
+  var inf = info();
+  document.getElementById("infoTable").innerHTML = Object.keys(inf).map(function (k) {
+    return "<tr><td>" + k + "</td><td>" + inf[k] + "</td></tr>";
+  }).join("");
+}
+function renderPerms() {
+  document.getElementById("permTable").innerHTML = PERMS.map(function (n) {
+    return "<tr><td>" + n + "</td><td>" + (permStates[n] || "…") + "</td></tr>";
+  }).join("");
+}
+function sha256Hex(text) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)).then(function (b) {
+    return Array.from(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+  });
+}
+function broadcast() {
+  if (!bc) { return; }
+  bc.postMessage({ type: "presence", id: id, page: location.pathname, info: info(), permissions: permStates, ts: Date.now() });
+}
+bc && (bc.onmessage = function (ev) {
+  var m = ev.data || {};
+  if (m.type !== "command" || (m.to && m.to !== id)) { return; }
+  if (m.verb === "ping") {
+    bc.postMessage({ type: "ack", id: id, verb: "ping", result: "pong", ts: Date.now() });
+  } else if (m.verb === "identify") {
+    var old = document.title; document.title = "★ HERE ★ " + old;
+    setTimeout(function () { document.title = old; }, 3000);
+    bc.postMessage({ type: "ack", id: id, verb: "identify", result: "title flashed", ts: Date.now() });
+  } else if (m.verb === "file.test") {
+    var content = String((m.args && m.args.content) || "");
+    var name = String((m.args && m.args.name) || "test.txt");
+    sha256Hex(content).then(function (hex) {
+      var bytes = new TextEncoder().encode(content).length;
+      document.getElementById("received").textContent =
+        "name: " + name + "\nbytes: " + bytes + "\nsha256: " + hex + "\n--- content ---\n" + content;
+      document.getElementById("ackLine").innerHTML =
+        '<span class="ok">file.test read and acknowledged</span> — sha256 ' + hex;
+      bc.postMessage({ type: "ack", id: id, verb: "file.test", name: name, bytes: bytes, sha256: hex, ts: Date.now() });
+    });
+  }
+});
+renderInfo(); refreshPerms(); renderPerms(); broadcast();
+setInterval(broadcast, 2000);
+setInterval(renderInfo, 5000);
+</script>
+</body>
+</html>

@@ -54,6 +54,12 @@ pick — never contents. Clipboard read reports only the length of what's there.
 <video id="preview" autoplay muted playsinline style="display:none"></video>
 <div id="micLevel" style="display:none"><div id="micFill"></div></div>
 
+<h2>Live relay demo (same browser)</h2>
+<p>Open the <a href="relay-client.html">relay client</a> in one tab and the
+<a href="relay-admin.html">relay admin panel</a> in another tab of the same browser:
+the panel shows the client's browser info and permission states live, and can push a
+test message whose delivery the client confirms with a SHA-256 hash.</p>
+
 <h2>Detected APIs (not requested)</h2>
 <p id="apiList" class="dim">—</p>
 <p class="dim">Screen capture and hardware device choosers (Bluetooth/USB/Serial/HID) are

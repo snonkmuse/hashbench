@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Relay Admin — Hashbench Lab</title>
+<style>
+  body { font-family: monospace; background: #111; color: #ddd; margin: 2em; max-width: 62em; }
+  table { border-collapse: collapse; } td, th { border: 1px solid #333; padding: 4px 10px; text-align: left; }
+  .dim { color: #888; } .ok { color: #7ee787; } .bad { color: #ff7b72; }
+  textarea, input { font-family: monospace; background: #1b1f24; color: #ddd; border: 1px solid #444; }
+  textarea { width: 100%; height: 4em; }
+  button { font-family: monospace; padding: 0.35em 0.9em; margin: 0.2em 0.3em 0.2em 0; }
+  #ack { border: 1px solid #444; padding: 0.8em; min-height: 2.5em; white-space: pre-wrap; }
+  a { color: #79c0ff; }
+</style>
+</head>
+<body>
+<h1>Relay Admin Panel</h1>
+<p class="dim">Live view of client sessions broadcasting on the <code>hashbench-relay-v1</code> channel
+(BroadcastChannel — same browser, same origin; the cross-device version uses the presence server).
+Open the <a href="relay-client.html">relay client</a> in another tab/window of this browser and it appears below.</p>
+
+<h2>Live sessions</h2>
+<div id="sessions"><p class="dim">No sessions yet — waiting for a client heartbeat…</p></div>
+
+<h2>Push a test file / message</h2>
+<label>File name: <input id="fname" value="secret.txt" size="20"></label>
+<textarea id="msg">RELAY TEST: the vault code is 4815 and the owl is not what it seems.</textarea>
+<br>
+<button id="sendBtn">Send file.test to session</button>
+<button id="pingBtn">Ping</button>
+<button id="identifyBtn">Identify (flash its title)</button>
+<h3>Acknowledgement</h3>
+<div id="ack" class="dim">Nothing sent yet.</div>
+
+<script>
+"use strict";
+var CHANNEL = "hashbench-relay-v1";
+var bc = ("BroadcastChannel" in window) ? new BroadcastChannel(CHANNEL) : null;
+var sessions = {};
+var expected = null; // {sha256, bytes} of last sent payload
+
+function sha256Hex(text) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)).then(function (b) {
+    return Array.from(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+  });
+}
+function uaShort(ua) {
+  if (!ua) { return "?"; }
+  var b = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "?";
+  var v = (ua.match(/(?:Chrome|Firefox|Edg)\/(\d+)/) || [])[1] || "";
+  var os = /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "macOS" : /Android/.test(ua) ? "Android" : /Linux/.test(ua) ? "Linux" : "?";
+  return b + " " + v + " / " + os;
+}
+function render() {
+  var wrap = document.getElementById("sessions");
+  var ids = Object.keys(sessions);
+  if (!ids.length) { wrap.innerHTML = '<p class="dim">No sessions yet — waiting for a client heartbeat…</p>'; return; }
+  wrap.innerHTML = "";
+  ids.forEach(function (sid) {
+    var s = sessions[sid];
+    var age = Math.round((Date.now() - s.lastTs) / 1000);
+    var div = document.createElement("div");
+    var perms = Object.keys(s.permissions || {}).map(function (k) {
+      return "<tr><td>" + k + "</td><td>" + s.permissions[k] + "</td></tr>";
+    }).join("");
+    div.innerHTML =
+      "<h3>Session " + sid + ' <span class="dim">(seen ' + age + "s ago, page " + s.page + ")</span></h3>" +
+      "<table><tr><td>Browser</td><td>" + uaShort(s.info.userAgent) + "</td></tr>" +
+      "<tr><td>User agent</td><td>" + s.info.userAgent + "</td></tr>" +
+      "<tr><td>Cores</td><td>" + s.info.hardwareConcurrency + "</td></tr>" +
+      "<tr><td>Language / TZ</td><td>" + s.info.language + " / " + s.info.timezone + "</td></tr>" +
+      "<tr><td>Screen / viewport</td><td>" + s.info.screen + " / " + s.info.viewport + "</td></tr></table>" +
+      "<h4>Permission states (live)</h4><table>" + perms + "</table>";
+    wrap.appendChild(div);
+  });
+}
+setInterval(render, 2000);
+function prune() {
+  var now = Date.now();
+  Object.keys(sessions).forEach(function (sid) { if (now - sessions[sid].lastTs > 8000) { delete sessions[sid]; } });
+  render();
+}
+setInterval(prune, 3000);
+
+bc && (bc.onmessage = function (ev) {
+  var m = ev.data || {};
+  if (m.type === "presence") {
+    sessions[m.id] = { info: m.info, permissions: m.permissions, page: m.page, lastTs: Date.now() };
+    render();
+  } else if (m.type === "ack") {
+    var el = document.getElementById("ack");
+    if (m.verb === "file.test" && expected) {
+      var match = (m.sha256 === expected.sha256 && m.bytes === expected.bytes);
+      el.innerHTML = "ACK from session " + m.id + " — file.test\nname: " + m.name + "\nbytes: " + m.bytes +
+        "\nsha256: " + m.sha256 + "\n" + (match ? '<span class="ok">SHA-256 MATCH ✓ — payload arrived intact</span>'
+                                                : '<span class="bad">MISMATCH ✗</span>');
+    } else {
+      el.textContent = "ACK from session " + m.id + " — " + m.verb + ": " + (m.result || "ok");
+    }
+  }
+});
+
+function firstSession() { var ids = Object.keys(sessions); return ids.length ? ids[0] : null; }
+document.getElementById("sendBtn").onclick = function () {
+  var to = firstSession();
+  if (!to) { document.getElementById("ack").textContent = "No live session to send to."; return; }
+  var content = document.getElementById("msg").value;
+  var name = document.getElementById("fname").value || "test.txt";
+  sha256Hex(content).then(function (hex) {
+    expected = { sha256: hex, bytes: new TextEncoder().encode(content).length };
+    bc.postMessage({ type: "command", to: to, verb: "file.test", args: { name: name, content: content } });
+    document.getElementById("ack").textContent = "Sent file.test (" + expected.bytes + " B, sha256 " + hex + ") to " + to + " — waiting for ack…";
+  });
+};
+document.getElementById("pingBtn").onclick = function () {
+  var to = firstSession(); if (to) { bc.postMessage({ type: "command", to: to, verb: "ping" }); }
+};
+document.getElementById("identifyBtn").onclick = function () {
+  var to = firstSession(); if (to) { bc.postMessage({ type: "command", to: to, verb: "identify" }); }
+};
+</script>
+</body>
+</html>
