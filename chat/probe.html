@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebRTC Candidate Probe</title>
+<style>
+  body { font-family: monospace; background: #111; color: #ddd; margin: 2em; max-width: 64em; }
+  #out { white-space: pre-wrap; border: 1px solid #333; padding: 1em; }
+</style>
+</head>
+<body>
+<h1>WebRTC Candidate Probe</h1>
+<p>Creates a data-channel peer connection and logs every ICE candidate it produces,
+plus gathering-state changes, for up to 15 seconds.</p>
+<div id="out">starting…</div>
+<script>
+"use strict";
+var out = [];
+var count = 0;
+function line(s) {
+  out.push(s);
+  document.getElementById("out").textContent = out.join("\n");
+}
+var t0 = Date.now();
+function ts() { return ((Date.now() - t0) / 1000).toFixed(1) + "s"; }
+try {
+  var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  pc.onicecandidate = function (ev) {
+    if (ev.candidate) {
+      count++;
+      var c = ev.candidate;
+      line(ts() + " candidate #" + count + ": type=" + c.type + " protocol=" + c.protocol +
+           " address=" + c.address + " port=" + c.port);
+    } else {
+      line(ts() + " end-of-candidates signal");
+    }
+  };
+  pc.onicegatheringstatechange = function () {
+    line(ts() + " iceGatheringState -> " + pc.iceGatheringState);
+  };
+  pc.oniceconnectionstatechange = function () {
+    line(ts() + " iceConnectionState -> " + pc.iceConnectionState);
+  };
+  pc.createDataChannel("probe");
+  pc.createOffer().then(function (offer) { return pc.setLocalDescription(offer); }).then(function () {
+    line(ts() + " local description set; gathering…");
+  }).catch(function (e) { line("offer error: " + e.name + " " + e.message); });
+  setTimeout(function () {
+    line("DONE total candidates: " + count + ", final gathering state: " + pc.iceGatheringState);
+  }, 15000);
+} catch (e) {
+  line("RTCPeerConnection failed: " + e.name + " " + e.message);
+}
+</script>
+</body>
+</html>
