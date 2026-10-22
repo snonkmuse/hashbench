@@ -61,7 +61,7 @@ var worker = null, ready = false, running = false;
 function setStatus(s) { document.getElementById("status").textContent = "Status: " + s; }
 
 function spawn() {
-  worker = new Worker("rx-worker.js");
+  worker = new Worker("rx-worker-v2.js");
   ready = false;
   worker.onmessage = function (ev) {
     var d = ev.data;
