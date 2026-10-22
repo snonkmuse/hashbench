@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Feed — a dead simple message board</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#111; color:#eee; margin:0; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 8px 0 2px; }
+  p.sub { color:#9a9; font-size: 13px; margin: 0 0 14px; }
+  #feed { border:1px solid #333; border-radius:8px; padding:10px 12px; min-height: 240px; background:#181818; }
+  .msg { padding: 6px 0; border-bottom: 1px solid #262626; word-wrap: break-word; }
+  .msg:last-child { border-bottom: none; }
+  .msg .who { color:#7cc7ff; font-weight: 600; }
+  .msg .when { color:#777; font-size: 12px; margin-left: 8px; }
+  .msg .text { display:block; margin-top: 2px; white-space: pre-wrap; }
+  #empty { color:#777; }
+  form { display:flex; gap:8px; margin-top: 12px; }
+  input { background:#222; color:#eee; border:1px solid #444; border-radius:6px; padding:10px; font-size:15px; }
+  #name { width: 130px; flex: none; }
+  #text { flex: 1; }
+  button { background:#2b6cb0; color:#fff; border:none; border-radius:6px; padding:10px 16px; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  #bar { display:flex; justify-content: space-between; align-items:center; margin-top:10px; }
+  #status { color:#9a9; font-size: 13px; }
+  #refresh { background:#333; }
+</style>
+</head>
+<body>
+<main>
+  <h1>The Feed</h1>
+  <p class="sub">Dead simple message board. Type, hit Enter, it's posted. Refresh the page to see what's new. Nothing fancy, nothing private — don't post secrets.</p>
+
+  <div id="feed"><div id="empty">Loading…</div></div>
+
+  <form id="postForm">
+    <input id="name" maxlength="24" placeholder="Your name" autocomplete="off">
+    <input id="text" maxlength="500" placeholder="Type a message…" autocomplete="off">
+    <button id="postBtn" type="submit">Post</button>
+  </form>
+
+  <div id="bar">
+    <span id="status"></span>
+    <button id="refresh" type="button">Refresh</button>
+  </div>
+</main>
+
+<script>
+  // Realtime Database (REST). One shared feed: /rooms/lobby/messages
+  const DB = "https://snonk-cadca-default-rtdb.firebaseio.com";
+  const FEED = DB + "/rooms/lobby/messages.json";
+
+  const feedEl = document.getElementById('feed');
+  const nameEl = document.getElementById('name');
+  const textEl = document.getElementById('text');
+  const statusEl = document.getElementById('status');
+  const postBtn = document.getElementById('postBtn');
+
+  nameEl.value = localStorage.getItem('feed-name') || '';
+  nameEl.addEventListener('change', () => localStorage.setItem('feed-name', nameEl.value.trim()));
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  async function loadFeed() {
+    statusEl.textContent = 'Loading…';
+    try {
+      const r = await fetch(FEED + '?orderBy="$key"&limitToLast=300');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const msgs = data ? Object.values(data) : [];
+      msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      if (!msgs.length) {
+        feedEl.innerHTML = '<div id="empty">No messages yet. Be the first.</div>';
+      } else {
+        feedEl.innerHTML = msgs.map(m =>
+          '<div class="msg"><span class="who">' + esc(m.n || 'anon') + '</span>' +
+          '<span class="when">' + esc(new Date(m.ts || 0).toLocaleTimeString()) + '</span>' +
+          '<span class="text">' + esc(m.t || '') + '</span></div>'
+        ).join('');
+      }
+      statusEl.textContent = msgs.length + ' message(s) · updated ' + new Date().toLocaleTimeString();
+      feedEl.scrollTop = feedEl.scrollHeight;
+    } catch (e) {
+      statusEl.textContent = 'Could not load the feed (' + e.message + '). The database may still be warming up — try Refresh in a moment.';
+    }
+  }
+
+  document.getElementById('postForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const text = textEl.value.trim();
+    if (!text) return;
+    const name = nameEl.value.trim() || 'anon';
+    localStorage.setItem('feed-name', name);
+    postBtn.disabled = true;
+    try {
+      const r = await fetch(FEED, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ n: name, t: text, ts: Date.now() })
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      textEl.value = '';
+      await loadFeed();
+    } catch (e) {
+      statusEl.textContent = 'Post failed (' + e.message + '). Try again in a moment.';
+    }
+    postBtn.disabled = false;
+    textEl.focus();
+  });
+
+  document.getElementById('refresh').addEventListener('click', loadFeed);
+  loadFeed();
+  setInterval(loadFeed, 20000); // gentle auto-refresh; the Refresh button and F5 work too
+  textEl.focus();
+</script>
+</body>
+</html>
